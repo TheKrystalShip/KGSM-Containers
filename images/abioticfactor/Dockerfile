@@ -37,7 +37,6 @@ RUN apt-get update \
   -y \
   --no-install-recommends \
   --no-install-suggests \
-  vim \
   locales \
   xvfb \
   wine64 \
