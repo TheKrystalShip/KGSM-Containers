@@ -11,6 +11,7 @@ LABEL org.opencontainers.image.authors="cristian.moraru@live.com"
 # Port mapping
 EXPOSE 7777/udp 27015/udp
 
+# Build vars (non-persistent)
 ARG DEBIAN_FRONTEND=noninteractive
 
 # Environment variables
