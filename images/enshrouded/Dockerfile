@@ -9,7 +9,7 @@ LABEL org.opencontainers.image.source=https://github.com/TheKrystalShip/KGSM-Con
 LABEL org.opencontainers.image.authors="cristian.moraru@live.com"
 
 # Port mapping
-EXPOSE 7777/udp 27015/udp
+EXPOSE 15636/udp 15637/udp 27015/udp 27016/udp
 
 # Build vars (non-persistent)
 ARG DEBIAN_FRONTEND=noninteractive
