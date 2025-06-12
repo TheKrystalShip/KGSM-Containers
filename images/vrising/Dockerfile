@@ -28,9 +28,6 @@ RUN useradd -m -d ${HOME} ${USER} \
   && chown -R root:root /tmp/.X11-unix \
   && chmod 1777 /tmp/.X11-unix
 
-# Declare volumes
-VOLUME [${SERVER_HOME}]
-
 # Install dependencies and clean up
 RUN dpkg --add-architecture i386 \
   && apt-get update \
