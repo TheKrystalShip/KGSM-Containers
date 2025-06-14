@@ -24,8 +24,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # Environment variables (persistent)
 ENV USER=kgsm \
   HOME=/home/kgsm \
-  SERVER_HOME=/opt/theforest \
-  ENTRYPOINT=/opt/theforest/entrypoint.sh
+  SERVER_HOME=/opt/theforest
 
 # Create user and necessary directories
 RUN useradd -m -d ${HOME} ${USER} \
@@ -34,9 +33,6 @@ RUN useradd -m -d ${HOME} ${USER} \
   && mkdir -p /tmp/.X11-unix \
   && chown -R root:root /tmp/.X11-unix \
   && chmod 1777 /tmp/.X11-unix
-
-# Declare volumes
-VOLUME [${SERVER_HOME}]
 
 # Install dependencies and clean up
 RUN apt-get update \
@@ -53,14 +49,12 @@ RUN apt-get update \
   && apt-get autoremove -y \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy server config
-COPY --chown=${USER}:${USER} --chmod=0655 ./server.cfg ${SERVER_HOME}
-
 # Copy entrypoint with ownership and permissions
-COPY --chown=${USER}:${USER} --chmod=0755 ./entrypoint.sh ${ENTRYPOINT}
+COPY --chown=${USER}:${USER} --chmod=0755 ./theforest.manage.sh /opt/theforest/theforest.manage.sh
 
 # Set working directory and switch to non-root user
 WORKDIR ${SERVER_HOME}
 USER ${USER}
 
-ENTRYPOINT ${ENTRYPOINT}
+ENTRYPOINT ["/opt/theforest/theforest.manage.sh"]
+CMD ["--start"]
