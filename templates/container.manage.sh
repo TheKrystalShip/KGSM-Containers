@@ -1,0 +1,951 @@
+#!/usr/bin/env bash
+
+# KGSM-Container management file for <game-name>
+#
+# Author: Cristian Moraru <cristian.moraru@live.com>
+# Version: 1.0
+#
+# Copyright (c) 2025 The Krystal Ship
+# Licensed under the GNU General Public License v3.0
+# https://www.gnu.org/licenses/gpl-3.0.en.html
+
+# This file is an example.
+# Replace empty variables below with actual values and adjust as necessary.
+
+# === BEGIN CONFIG ===
+# Environment variables passed onto the container from the docker-compose file
+export steamcmd_additional_args="${STEAMCMD_ADDITIONAL_ARGS:-}"
+
+export instance_name=""
+export instance_working_dir="/opt/$instance_name"
+
+export instance_backups_dir="$instance_working_dir/backups"
+export instance_install_dir="$instance_working_dir/install"
+export instance_logs_dir="$instance_working_dir/logs"
+export instance_saves_dir="$instance_working_dir/saves"
+export instance_temp_dir="$instance_working_dir/temp"
+
+export instance_launch_dir="$instance_install_dir/any/subdirectory/where/the/server/is/located"
+
+export instance_steam_app_id=0
+export instance_is_steam_account_required=0
+
+export instance_platform="windows"
+export instance_executable_file="$instance_launch_dir/server.exe"
+export instance_executable_arguments="--start --nogui --no-splash"
+
+export instance_logs_redirect="$instance_logs_dir/$instance_name-$(date +"%Y-%m-%dT%H:%M:%S").log"
+
+export instance_stop_command_timeout_seconds=30
+export instance_stop_command=""
+
+export instance_save_command_timeout_seconds=5
+export instance_save_command=""
+
+export instance_compress_backups="false"
+
+export instance_version_file="$instance_working_dir/.$instance_name.version"
+export instance_pid_file="$instance_working_dir/.$instance_name.pid"
+export instance_socket_file="$instance_working_dir/.$instance_name.socket"
+# === END CONFIG ===
+
+self=$(basename "$0")
+
+function usage() {
+  echo "
+Usage:
+  $self OPTION
+
+Options:
+  -h, --help                Display this help message
+  --start                   Start the server in the current terminal
+  --start [--background]    Start the server in the background
+  --stop                    Stop the server
+  --stop [--no-save]        Do not save on shutdown
+  --stop [--no-graceful]    Kill the server process without sending it the
+                            stop command.
+  --kill                    Kill the server process
+  --save                    Save the current game state
+  --is-active               Prints if the server is active
+  --input <command>         Send an ad-hoc command to the server
+
+  --logs                    Print last 10 lines of the log
+  --logs [-f, --follow]     Print live logs
+
+  --download                Downloads the game server files
+  --download [version]      Downloads the game server files for a specific version
+  --deploy                  Deploys the game server files from the temporary directory
+  --update                  Updates the game server files to the latest version
+
+  --list-backups            Print a list of available backups
+  --create-backup           Create a backup of the game server files
+  --restore-backup <source> Restore a specified backup
+
+  --version                 Print the locally installed version
+  --version [--save <ver>]  Save a given version to file
+  --version [--latest]      Print the latest available version
+  --version [--compare]     Test the local version vs the latest available.
+                            If the latest is different, it will be printed to
+                            stdout
+
+Examples:
+  $self --start --background
+  $self --input '/save'
+  $self --stop
+"
+}
+
+SUCCESS="SUCCESS"
+INFO="INFO"
+ERROR="ERROR"
+WARNING="WARNING"
+
+## Colored output
+# Check if stdout is tty
+if test -t 1; then
+  ncolors=0
+
+  # Check for availability of tput
+  if command -v tput >/dev/null 2>&1; then
+    ncolors="$(tput colors)"
+  fi
+
+  # More than 8 means it supports colors
+  if [[ $ncolors ]] && [[ "$ncolors" -gt 8 ]]; then
+    export COLOR_RED="\033[0;31m"
+    export COLOR_GREEN="\033[0;32m"
+    export COLOR_ORANGE="\033[0;33m"
+    export COLOR_BLUE="\033[0;34m"
+    export COLOR_END="\033[0m"
+
+    SUCCESS="${COLOR_GREEN}${SUCCESS}${COLOR_END}"
+    INFO="${COLOR_BLUE}${INFO}${COLOR_END}"
+    ERROR="${COLOR_RED}${ERROR}${COLOR_END}"
+    WARNING="${COLOR_ORANGE}${WARNING}${COLOR_END}"
+  fi
+fi
+
+function __print_success() {
+  echo -e "[$SUCCESS] ${BASH_SOURCE[-1]##*/}:${BASH_LINENO[0]} $1"
+}
+
+function __print_info() {
+  echo -e "[$INFO] ${BASH_SOURCE[-1]##*/}:${BASH_LINENO[0]} $1"
+}
+
+function __print_error() {
+  echo -e "[$ERROR] ${BASH_SOURCE[-1]##*/}:${BASH_LINENO[0]} $1" >&2
+}
+
+function __print_warning() {
+  echo -e "[$WARNING] ${BASH_SOURCE[-1]##*/}:${BASH_LINENO[0]} $1" >&2
+}
+
+# shellcheck disable=SC2199
+if [[ $@ =~ "--debug" ]]; then
+  export PS4='+(\033[0;33m${BASH_SOURCE}:${LINENO}\033[0m): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+  set -x
+  for a; do
+    shift
+    case $a in
+    --debug) continue ;;
+    *) set -- "$@" "$a" ;;
+    esac
+  done
+fi
+
+set -o pipefail
+
+if [[ $# -eq 0 ]]; then
+  __print_error "Missing arguments"
+  exit 1
+fi
+
+# Start the server in the current terminal
+function _start() {
+  __print_info "Starting $self in the current terminal"
+
+  # Check if the game server is installed
+  if [ -z "$(ls -A "$instance_launch_dir")" ]; then
+    __print_warning "Game server is not installed, running update process first"
+    if ! _update; then
+      __print_error "Failed to install the game server"
+      return 1
+    fi
+    __print_success "Game server installation complete, proceeding with startup"
+  fi
+
+  cd "$instance_launch_dir" || {
+    __print_error "Failed to move into $instance_launch_dir, exiting"
+    return 1
+  }
+
+  rm -f /tmp/.X1-lock 2>&1
+  Xvfb :1 -screen 0 800x600x24 &
+  export DISPLAY=:1
+  export WINEDEBUG=-all
+
+  # shellcheck disable=SC2086
+  exec /usr/lib/wine/wine64 $instance_executable_file $instance_executable_arguments
+}
+
+# Start the server in the background
+# This function will create a named pipe for communication with the server
+# and redirect logs to a file
+function _start_background() {
+  __print_info "Starting $self in the background"
+
+  cd "$instance_launch_dir" || {
+    __print_error "Failed to move into $instance_launch_dir, exiting"
+    return 1
+  }
+
+  [[ -p "$instance_socket_file" ]] && rm "$instance_socket_file"
+
+  mkfifo "$instance_socket_file"
+
+  # Launch the existing _start in a subshell:
+  (_start) <"$instance_socket_file" &>$instance_logs_redirect &
+
+  local server_pid=$!
+  echo "$server_pid" >"$instance_pid_file"
+  __print_success "Instance $instance_name started with PID $server_pid, saved to $instance_pid_file"
+
+  # Prevent EOF on fifo by keeping the named pipe open with a dummy writer
+  tail -f /dev/null >"$instance_socket_file" &
+  echo $! >"$TAIL_PID_FILE"
+}
+
+# Kill the server process and all its children
+# This function will also remove the PID file and the named pipe
+function _kill_all_processes() {
+
+  # Kill the tail process
+  if [[ -f "$TAIL_PID_FILE" ]]; then
+    local tail_pid
+    tail_pid=$(<"$TAIL_PID_FILE")
+    if kill -0 "$tail_pid" 2>/dev/null; then
+      kill -TERM "$tail_pid"
+    fi
+  fi
+
+  if [[ ! -f "$instance_pid_file" ]]; then
+    __print_error "No PID file found for $instance_name."
+    __print_error "If this is unexpected, check running processes to ensure the instance is not running uncontrolled"
+    return 1
+  fi
+
+  local server_pid
+  server_pid=$(<"$instance_pid_file")
+
+  # Find all child processes of the server PID
+  local output
+  local child_pids
+  child_pids=$(pgrep -P "$server_pid")
+
+  # Instance has child processes
+  if [[ -n "$child_pids" ]]; then
+    if ! output=$(kill -TERM "${child_pids[@]}"); then
+      __print_error "Failed to kill child PIDs ${child_pids[*]}."
+      __print_error "Output: ${output}"
+      return 1
+    fi
+  fi
+
+  # Only parent process exists
+  if _is_active &>/dev/null; then
+    if ! output=$(kill -TERM "$server_pid" 2>&1); then
+      __print_error "Failed to kill PID $server_pid."
+      __print_error "Output: ${output}"
+      return 1
+    fi
+  fi
+}
+
+# Stop the server gracefully or forcefully
+# This function will also save the game state if requested
+# and remove the PID file and the named pipe
+function _stop_server() {
+  local no_save=0
+  local no_graceful=0
+
+  __print_info "Stopping $self"
+
+  if ! _is_active &>/dev/null; then
+    __print_error "Instance '$instance_name' is not running"
+    return 0
+  fi
+
+  # Process arguments without destroying them
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+    --no-save) no_save=1 ;;
+    --no-graceful) no_graceful=1 ;;
+    # Skip the special argument passed in some cases
+    "\@") continue ;;
+    *) continue ;;
+    esac
+  done
+
+  if [[ ! "$no_save" ]]; then
+    _send_save_command
+  fi
+
+  if [[ ! "$no_graceful" ]]; then
+    # Send stop command to socket
+    if [[ -p "$instance_socket_file" ]]; then
+      if [[ -n "$instance_stop_command" ]]; then
+        echo "$instance_stop_command" >"$instance_socket_file"
+      fi
+    fi
+  fi
+
+  _kill_all_processes
+
+  [[ -f "$instance_pid_file" ]] && rm -f "$instance_pid_file"
+  [[ -p "$instance_socket_file" ]] && rm -f "$instance_socket_file"
+  [[ -f "$TAIL_PID_FILE" ]] && rm -f "$TAIL_PID_FILE"
+
+  __print_success "Instance '$instance_name' stopped"
+}
+
+# This function is used to stop the server gracefully with a timeout
+# If the server does not stop within the timeout, it will be killed forcefully
+function _timed_stop() {
+  local no_save=$1
+  local no_graceful=$2
+
+  # UPnP can take a few seconds, so to avoid preemptive timeout we wait longer
+  if ! timeout "$instance_stop_command_timeout_seconds" "$0" --internal-stop ${no_save:+--no-save} ${no_graceful:+--no-graceful}; then
+    __print_error "Timeout reached, killing instance"
+    exec "$0" --kill
+  fi
+}
+
+# This function is used to save the game state
+# It will send the save command to the server through the named pipe
+function _send_save_command() {
+  # Check if socket file exists and is a named pipe
+  if [[ -p "${instance_socket_file}" ]]; then
+    # Check if save command is defined
+    if [[ -n "${instance_save_command}" ]]; then
+      echo "${instance_save_command}" >>"${instance_socket_file}"
+      # Sleep to give the server time to process the save command
+      sleep "${config_save_command_timeout_seconds:-5}"
+      return 0
+    fi
+  else
+    __print_error "Save failed: No active server found or socket file missing."
+    return 1
+  fi
+}
+
+# This function is used to send input commands to the server through
+# the named pipe
+function _send_input() {
+  if [[ -p "$instance_socket_file" ]]; then
+    echo "$1" >>"$instance_socket_file"
+  else
+    __print_error "Input failed: No active server found."
+    return 1
+  fi
+}
+
+# This function checks if the server is active by checking the PID file
+# and verifying if the process with that PID is still running
+# If the PID file is empty or does not exist, it will return inactive
+function _is_active() {
+  if [[ ! -f "$instance_pid_file" ]]; then
+    __print_info "Inactive" && return 1
+  fi
+
+  local server_pid
+  server_pid=$(<"$instance_pid_file")
+
+  if [[ -z "$server_pid" ]]; then
+    __print_error "Instance PID file present but empty, removing"
+    rm -rf "$instance_pid_file"
+
+    __print_info "Inactive" && return 1
+  fi
+
+  # Just test if a process with that PID exists
+  if kill -0 "$server_pid" 2>/dev/null; then
+    __print_info "Active" && return 0
+  fi
+
+  __print_info "Inactive" && return 1
+}
+
+# For closing the log reader background process
+tail_pid=
+# shellcheck disable=SC2317
+function _exit_print_logs() {
+  if [[ -z "$tail_pid" ]]; then
+    return 0
+  fi
+
+  if pgrep "$tail_pid"; then
+    __print_info "Stopping log reader..."
+    kill "$tail_pid"
+  fi
+}
+
+trap '_exit_print_logs' TERM EXIT INT
+
+function _print_logs() {
+  local follow=${1:-}
+  local latest_log_file
+
+  # Without follow, just print the last few lines of the latest file
+  if [[ "$follow" != "--follow" ]]; then
+    latest_log_file="$(ls -t "$instance_logs_dir" | head -1)"
+
+    if [[ -z "$latest_log_file" ]]; then
+      __print_info "No log files found"
+      return 0
+    fi
+
+    tail "$instance_logs_dir/$latest_log_file"
+    return $?
+
+  # With follow, keep the logs live even through file changes
+  else
+    if ! command -v inotifywait &>/dev/null; then
+      __print_error "inotifywait is required to follow logs, please install it"
+      return 1
+    fi
+    while true; do
+      latest_log_file="$(ls -t "$instance_logs_dir" | head -1)"
+
+      # This is busy waiting, but don't have a better solution atm.
+      if [[ -z "$latest_log_file" ]]; then
+        sleep 2
+        continue
+      fi
+
+      __print_info "Following logs from $latest_log_file"
+
+      tail -F "$instance_logs_dir/$latest_log_file" &
+      tail_pid=$!
+
+      # Wait for tail process to finish or the log file to be replaced
+      inotifywait -e create -e moved_to "$instance_logs_dir"
+
+      # New log file detected; kill current tail and loop back to follow the new file
+      kill "$tail_pid"
+      __print_info "Detected new log file. Switching to the latest log..."
+      sleep 1
+    done
+  fi
+}
+
+function _update() {
+
+  __print_info "Starting update..."
+
+  # Check if the instance is active
+  if _is_active &>/dev/null; then
+    __print_error "$self is currently running, please shut down before attempting to update"
+    return 1
+  fi
+
+  # Get the latest version from remote
+  local latest_version
+  latest_version=$(_get_latest_version)
+
+  if [[ -z "$latest_version" ]]; then
+    __print_error "Failed to retrieve latest version, exiting"
+    return 1
+  fi
+
+  # Compare versions and save the latest version if different
+  local installed_version
+  installed_version=$(_get_installed_version)
+
+  if [[ "$latest_version" == "$installed_version" ]]; then
+    __print_info "Local version is already up-to-date"
+    return 0
+  fi
+
+  # Download the latest version
+  if ! _download "$latest_version"; then
+    __print_error "Failed to download latest version $latest_version"
+    return 1
+  fi
+
+  # Deploy the downloaded files
+  if ! _deploy; then
+    __print_error "Failed to deploy new files"
+    return 1
+  fi
+
+  # Save the new version to file
+  if ! _save_version "$latest_version"; then
+    __print_error "Failed to save new version $latest_version to file"
+    return 1
+  fi
+
+  __print_success "Update complete, new version: $latest_version"
+
+  return 0
+}
+
+function _create_backup() {
+  __print_info "Creating backup..."
+
+  # Check if install directory exists
+  if [[ ! -d "${instance_install_dir}" ]]; then
+    __print_error "Install directory ${instance_install_dir} does not exist"
+    return 1
+  fi
+
+  # Check for content inside the install directory before attempting to
+  # create a backup. If empty, skip
+  if [ -z "$(ls -A "${instance_install_dir}")" ]; then
+    # Source directory is empty, nothing to back up
+    __print_warning "${instance_install_dir} is empty, skipping backup"
+    return 0
+  fi
+
+  # Check instance running state before attempting to create backup
+  if _is_active &>/dev/null; then
+    __print_error "$self is currently running, please shut down before attempting to create a backup"
+    return 1
+  fi
+
+  # Ensure backup directory exists
+  if [[ ! -d "${instance_backups_dir}" ]]; then
+    mkdir -p "${instance_backups_dir}" || {
+      __print_error "Failed to create backup directory ${instance_backups_dir}"
+      return 1
+    }
+  fi
+
+  # Format current datetime for backup filename
+  local datetime
+  datetime="$(date +"%Y-%m-%dT%H:%M:%S")"
+  local installed_version
+  installed_version=$(_get_installed_version)
+  local output="${instance_backups_dir}/${instance_name}-${installed_version:-unknown}-${datetime}.backup"
+
+  if [[ "$instance_compress_backups" == "true" ]]; then
+    output="${output}.tar.gz"
+
+    if ! touch "$output"; then
+      __print_error "Failed to create $output"
+      return 1
+    fi
+
+    cd "$instance_install_dir" || return 1
+
+    if ! tar -czf "$output" .; then
+      __print_error "Failed to compress $output"
+      return 1
+    fi
+  else
+    # Create backup folder if it doesn't exit
+    if [ ! -d "$output" ]; then
+      if ! mkdir -p "$output"; then
+        __print_error "Error creating backup folder $output"
+        return 1
+      fi
+    fi
+
+    # Copy everything from the install directory into a backup folder
+    if ! cp -r "$instance_install_dir"/* "$output"/; then
+      __print_error "Failed to create backup $output"
+      rm -rf "${output:?}"
+      return 1
+    fi
+  fi
+
+  # _emit_instance_backup_created "${instance%.ini}" "$output" "$INSTANCE_INSTALLED_VERSION"
+  __print_success "Backup created"
+  return 0
+}
+
+function _restore_backup() {
+  local source="$instance_backups_dir/$1"
+  local backup_version
+
+  __print_info "Restoring ${source}..."
+
+  if [[ ! -f "$source" ]] && [[ ! -d "$source" ]]; then
+    __print_error "Could not find backup $source"
+    return 1
+  fi
+
+  # Get version number from $source
+  IFS='-' read -ra backup_name <<<"${source#"$instance_backups_dir/"}"
+  backup_version="${backup_name[2]}"
+  unset IFS
+
+  if [ -n "$(ls -A "$instance_install_dir")" ]; then
+    # $instance_install_dir is not empty, create new backup before proceeding
+
+    __print_warning "Current installation directory is not empty, creating a backup first..."
+
+    _create_backup || {
+      local create_backup_exit_code=$?
+      __print_error "Failed to restore backup ${source#"$instance_backups_dir/"}"
+      return $create_backup_exit_code
+    }
+
+    if ! rm -rf "${instance_install_dir:?}"/*; then
+      __print_error "Failed to clear $instance_install_dir, exiting"
+      return 1
+    fi
+  fi
+
+  if [[ "$source" == *.gz ]]; then
+    cd "$instance_install_dir" || return 1
+
+    if ! tar -xzf "$source" .; then
+      __print_error "Failed to restore $source"
+      return 1
+    fi
+  else
+    # $instance_install_dir is empty/user confirmed continue, move the backup into it
+    if ! cp -r "$source"/* "$instance_install_dir"/; then
+      __print_error "Failed to restore backup $source"
+      return 1
+    fi
+  fi
+
+  # Update instance version file with $backup_version
+  _save_version "$backup_version" || {
+    __print_error "Failed to save restored version $backup_version to file."
+    return 1
+  }
+
+  # __emit_instance_backup_restored "${instance%.ini}" "$source" "$backup_version"
+  __print_success "Restore complete"
+  return 0
+}
+
+function _list_backups() {
+  shopt -s extglob nullglob
+
+  # Create array with contents of the backup dir
+  backups_array=("$instance_backups_dir"/*)
+  # remove leading $instance_backups_dir:
+  backups_array=("${backups_array[@]#"$instance_backups_dir/"}")
+
+  echo "${backups_array[@]}"
+}
+
+function _get_installed_version() {
+  echo "$(<"$instance_version_file")"
+}
+
+function _get_latest_version() {
+
+  username=anonymous
+  auth_level=$instance_is_steam_account_required
+
+  if [[ $auth_level -ne 0 ]]; then
+    if [[ -z "$STEAM_USERNAME" ]]; then
+      __print_error "STEAM_USERNAME is expected but it's not set"
+      return 1
+    fi
+
+    if [[ -z "$STEAM_PASSWORD" ]]; then
+      __print_error "STEAM_PASSWORD is expected but it's not set"
+      return 1
+    fi
+
+    username="$STEAM_USERNAME $STEAM_PASSWORD"
+  fi
+
+  local latest_version
+  latest_version=$(
+    steamcmd \
+      +login $username \
+      +app_info_update 1 \
+      +app_info_print $instance_steam_app_id \
+      +quit |
+      tr '\n' ' ' |
+      grep --color=NEVER \
+        -Po '"branches"\s*{\s*"public"\s*{\s*"buildid"\s*"\K(\d*)'
+  )
+
+  if [[ -z "$latest_version" ]]; then
+    __print_error "Failed to retrieve latest version, got empty response from SteamCMD"
+    return 1
+  fi
+
+  echo "$latest_version"
+}
+
+function _compare_versions() {
+  local installed_version
+  installed_version=$(_get_installed_version)
+
+  local latest_version
+  latest_version=$(_get_latest_version)
+
+  if [[ -z "$latest_version" ]]; then
+    __print_error "No version information was returned from remote"
+    return 1
+  fi
+
+  if [[ "$latest_version" == "$installed_version" ]]; then
+    __print_info "Local version is the same as remote version"
+    return 1
+  fi
+
+  echo "$latest_version"
+}
+
+function _save_version() {
+  local version=$1
+
+  __print_info "Saving version ${version}..."
+
+  echo "$version" >"$instance_version_file"
+
+  __print_success "Version saved"
+  return 0
+}
+
+function _download() {
+  local version=$1
+  local dest=${2:-$instance_temp_dir}
+  local app_id=${3:-$instance_steam_app_id}
+
+  __print_info "Downloading..."
+
+  if [[ -z "$instance_steam_app_id" ]]; then
+    __print_error "'instance_steam_app_id' is expected but it's not set"
+    return 1
+  fi
+
+  if [[ -z "$instance_is_steam_account_required" ]]; then
+    __print_error "'instance_is_steam_account_required' is expected but it's not set"
+    return 1
+  fi
+
+  username=anonymous
+  if [[ $instance_is_steam_account_required -ne 0 ]]; then
+    if [[ -z "$STEAM_USERNAME" ]]; then
+      __print_error "'STEAM_USERNAME' is expected but it's not set"
+      return 1
+    fi
+
+    if [[ -z "$STEAM_PASSWORD" ]]; then
+      __print_error "'STEAM_PASSWORD' is expected but it's not set"
+      return 1
+    fi
+
+    username="$STEAM_USERNAME $STEAM_PASSWORD"
+  fi
+
+  # shellcheck disable=SC2086
+  steamcmd \
+    +@sSteamCmdForcePlatformType "${instance_platform:-windows}" \
+    +force_install_dir "$dest" \
+    +login $username \
+    +app_update "$app_id" \
+    $steamcmd_additional_args validate +quit
+
+  __print_success "Download complete"
+  return 0
+}
+
+function _deploy() {
+  local source=$instance_temp_dir
+  local dest=$instance_install_dir
+
+  __print_info "Deploying..."
+
+  # Check if $source is empty
+  if [[ -z "$(ls -A "$source")" ]]; then
+    __print_error "$source is empty, nothing to deploy. Exiting"
+    return 1
+  fi
+
+  # Copy everything from $source into $dest
+  if ! cp -rf "$source"/* "$dest"; then
+    __print_error "Failed to copy contents from $source into $dest"
+    return 1
+  fi
+
+  if ! rm -rf "${source:?}"/*; then
+    __print_error "Failed to clear $source"
+    return 1
+  fi
+
+  __print_success "Deploy complete"
+  return 0
+}
+
+# Functions to add for standalone management:
+# - update
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    usage && exit 0
+    ;;
+  --start)
+    shift
+    if [[ -z "$1" ]]; then
+      _start
+      exit $?
+    fi
+    case "$1" in
+    --background)
+      _start_background
+      exit $?
+      ;;
+    *)
+      __print_error "Invalid argument $1"
+      exit 1
+      ;;
+    esac
+    ;;
+  --stop)
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+      --no-save)
+        no_save=1
+        ;;
+      --no-graceful)
+        no_graceful=1
+        ;;
+      *)
+        __print_error "Invalid argument $1"
+        exit 1
+        ;;
+      esac
+      shift
+    done
+    _timed_stop "$no_save" "$no_graceful"
+    exit $?
+    ;;
+  --internal-stop)
+    shift
+    if [[ -z "$1" ]]; then
+      _stop_server "\@"
+      exit $?
+    else
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+        --no-save)
+          no_save=1
+          ;;
+        --no-graceful)
+          no_graceful=1
+          ;;
+        *)
+          __print_error "Invalid argument $1"
+          exit 1
+          ;;
+        esac
+        shift
+      done
+    fi
+    _stop_server ${no_save:+--no-save} ${no_graceful:+--no-graceful}
+    exit $?
+    ;;
+  --kill)
+    _kill_all_processes
+    exit $?
+    ;;
+  --save)
+    _send_save_command
+    exit $?
+    ;;
+  --is-active)
+    _is_active
+    exit $?
+    ;;
+  --input)
+    shift
+    if [[ -z "$1" ]]; then
+      __print_error "Missing argument <command>"
+      exit 1
+    fi
+    _send_input "$1"
+    exit $?
+    ;;
+  --logs)
+    shift
+    follow=""
+    if [[ "$1" == "-f" ]] || [[ "$1" == "--follow" ]]; then
+      follow="--follow"
+    fi
+    _print_logs $follow
+    exit $?
+    ;;
+  --version)
+    shift
+    if [[ -z "$1" ]]; then
+      _get_installed_version
+      exit $?
+    fi
+    case "$1" in
+    --compare)
+      _compare_versions
+      exit $?
+      ;;
+    --latest)
+      _get_latest_version
+      exit $?
+      ;;
+    --save)
+      shift
+      if [[ -z "$1" ]]; then
+        __print_error "Missing argument <version>"
+        exit 1
+      fi
+      _save_version "$1"
+      exit $?
+      ;;
+    *)
+      __print_error "Invalid argument $1"
+      exit 1
+      ;;
+    esac
+    ;;
+  --create-backup)
+    _create_backup
+    exit $?
+    ;;
+  --restore-backup)
+    _restore_backup "$@"
+    exit $?
+    ;;
+  --list-backups)
+    _list_backups
+    exit $?
+    ;;
+  --download)
+    version=0
+    shift
+    if [[ -n "$1" ]]; then
+      version="$1"
+    fi
+    _download "$version"
+    exit $?
+    ;;
+  --deploy)
+    _deploy
+    exit $?
+    ;;
+  --update)
+    _update
+    exit $?
+    ;;
+  *)
+    __print_error "Unknown argument $1"
+    exit 1
+    ;;
+  esac
+  shift
+done
+
+exit $?
