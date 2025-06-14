@@ -24,13 +24,14 @@ if [[ $@ =~ "--debug" ]]; then
 fi
 
 # Env variables passed to the container
-export max_server_players="${MaxServerPlayers:-8}"
-export port="${Port:-7777}"
-export query_port="${QueryPort:-27015}"
-export server_password="${ServerPassword:-password}"
-export steam_server_name="${SteamServerName:-KGSM}"
-export world_save_name="${WorldSaveName:-Cascade}"
-export additional_args="${AdditionalArgs:-}"
+export max_server_players="${MAX_SERVER_PLAYERS:-8}"
+export port="${PORT:-7777}"
+export query_port="${QUERY_PORT:-27015}"
+export server_password="${SERVER_PASSWORD:-password}"
+export steam_server_name="${STEAM_SERVER_NAME:-KGSM}"
+export world_save_name="${WORLD_SAVE_NAME:-Cascade}"
+export additional_args="${ADDITIONAL_LAUNCH_ARGS:-}"
+export steamcmd_additional_args="${STEAMCMD_ADDITIONAL_ARGS:-}"
 
 # === BEGIN INJECT CONFIG ===
 export instance_name="abioticfactor"
@@ -67,7 +68,6 @@ export instance_socket_file="$instance_working_dir/.$instance_name.socket"
 
 export instance_enable_port_forwarding="false"
 export instance_upnp_ports=()
-
 # === END INJECT CONFIG ===
 
 self=$(basename "$0")
@@ -817,8 +817,7 @@ function _download() {
     +force_install_dir "$dest" \
     +login $username \
     +app_update "$app_id" \
-    validate \
-    +quit
+    $steamcmd_additional_args validate +quit
 
   __print_success "Download complete"
   return 0

@@ -23,6 +23,9 @@ if [[ $@ =~ "--debug" ]]; then
   done
 fi
 
+# Environment variables passed onto the container
+export steamcmd_additional_args="${STEAMCMD_ADDITIONAL_ARGS:-}"
+
 # === BEGIN INJECT CONFIG ===
 export instance_name="vrising"
 export instance_working_dir="/opt/$instance_name"
@@ -823,8 +826,7 @@ function _download() {
     +force_install_dir "$dest" \
     +login $username \
     +app_update "$app_id" \
-    validate \
-    +quit
+    $steamcmd_additional_args validate +quit
 
   __print_success "Download complete"
   return 0
