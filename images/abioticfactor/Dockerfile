@@ -1,6 +1,13 @@
 # KGSM Dockerfile for Abiotic Factor Dedicated Server
 # This file is based on Pleut/abiotic-factor-linux-docker (https://github.com/Pleut/abiotic-factor-linux-docker)
 # with modifications done to allow integration with KGSM.
+#
+# Author: Cristian Moraru <cristian.moraru@live.com>
+# Version: 1.0
+#
+# Copyright (c) 2025 The Krystal Ship
+# Licensed under the GNU General Public License v3.0
+# https://www.gnu.org/licenses/gpl-3.0.en.html
 
 # Starter image based on SteamCMD
 FROM steamcmd/steamcmd:debian
