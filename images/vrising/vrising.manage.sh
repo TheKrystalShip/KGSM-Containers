@@ -35,6 +35,7 @@ export instance_install_dir="$instance_working_dir/install"
 export instance_logs_dir="$instance_working_dir/logs"
 export instance_saves_dir="$instance_working_dir/saves"
 export instance_temp_dir="$instance_working_dir/temp"
+
 export instance_launch_dir="$instance_working_dir/install"
 
 export instance_steam_app_id=1829350
@@ -214,7 +215,7 @@ function _start() {
   __print_info "Starting $self in the current terminal"
 
   # Check if the game server is installed
-  if [[ ! -f "$instance_version_file" ]] || [[ ! -d "$instance_install_dir" ]] || [[ ! -f "$instance_install_dir/VRisingServer.exe" ]]; then
+  if [[ ! -f "$instance_launch_dir/VRisingServer.exe" ]]; then
     __print_warning "Game server is not installed, running update process first"
     if ! _update; then
       __print_error "Failed to install the game server"

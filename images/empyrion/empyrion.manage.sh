@@ -216,7 +216,7 @@ function _start() {
   __print_info "Starting $self in the current terminal"
 
   # Check if the game server is installed
-  if [[ ! -f "$instance_version_file" ]] || [[ ! -d "$instance_install_dir" ]] || [[ ! -f "$instance_launch_dir/EmpyrionDedicated.exe" ]]; then
+  if [[ ! -f "$instance_launch_dir/EmpyrionDedicated.exe" ]]; then
     __print_warning "Game server is not installed, running update process first"
     if ! _update; then
       __print_error "Failed to install the game server"
