@@ -24,7 +24,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 # Environment variables (persistent)
 ENV USER=kgsm \
   HOME=/home/kgsm \
-  SERVER_HOME=/opt/theforest
+  SERVER_HOME=/opt/theforest \
+  MANAGEMENT_FILE=/opt/theforest/theforest.manage.sh
 
 # Create user and necessary directories
 RUN useradd -m -d ${HOME} ${USER} \

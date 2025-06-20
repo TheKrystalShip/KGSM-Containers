@@ -25,7 +25,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ENV USER=kgsm \
   HOME=/home/kgsm \
   SERVER_HOME=/opt/enshrouded \
-  ENTRYPOINT=/opt/enshrouded/entrypoint.sh
+  MANAGEMENT_FILE=/opt/enshrouded/entrypoint.sh
 
 # Create user and necessary directories
 RUN useradd -m -d ${HOME} ${USER} \
@@ -60,10 +60,11 @@ RUN dpkg --add-architecture i386 \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy entrypoint with ownership and permissions
-COPY --chown=${USER}:${USER} --chmod=0755 ./entrypoint.sh ${ENTRYPOINT}
+COPY --chown=${USER}:${USER} --chmod=0755 ./entrypoint.sh /opt/enshrouded/entrypoint.sh
 
 # Set working directory and switch to non-root user
 WORKDIR ${SERVER_HOME}
 USER ${USER}
 
-ENTRYPOINT ${ENTRYPOINT}
+ENTRYPOINT ["/opt/enshrouded/entrypoint.sh"]
+CMD ["--start"]

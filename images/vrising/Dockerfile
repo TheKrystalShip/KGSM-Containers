@@ -24,7 +24,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 # Environment variables
 ENV USER=kgsm \
   HOME=/home/kgsm \
-  SERVER_HOME=/opt/vrising
+  SERVER_HOME=/opt/vrising \
+  MANAGEMENT_FILE=/opt/vrising/vrising.manage.sh
 
 # Create user and necessary directories
 RUN useradd -m -d ${HOME} ${USER} \
