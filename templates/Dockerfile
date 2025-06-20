@@ -27,7 +27,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 # Environment variables
 ENV USER=kgsm \
   HOME=/home/kgsm \
-  SERVER_HOME=/opt/<game-name>
+  SERVER_HOME=/opt/<game-name> \
+  MANAGEMENT_FILE=/opt/<game-name>/<game-name>.manage.sh
 
 # Create user and necessary directories
 RUN useradd -m -d ${HOME} ${USER} \
